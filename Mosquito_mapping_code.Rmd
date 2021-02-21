@@ -1,0 +1,90 @@
+---
+title: "R Notebook for forecasting a risk map of Culex mosquitoes"
+output: html_notebook
+---
+
+This notebook R code is for forecasting a risk map f Culex mosquitoes. 
+
+Due to high volumn of raster data, we have computed buffer values and extracted values from raster layers using GPS mosquito samples. This file contains mosquitoes and associated environmental data and can be found in this github [link](https://github.com/tuyenhavan/Mosquito_ILRI). It is also noted that some pre-processing steps were done in other software such as Python. If readers would like to get additional code or materials, please email the coresponding author. 
+
+# Read the dataset
+
+```{r}
+# Read the csv file from github
+library(tidyr)
+
+df<-read.csv("https://raw.githubusercontent.com/tuyenhavan/Mosquito_ILRI/main/Dataset.csv")
+
+# Select variables from 1 to 13
+df<-df[,1:13]
+# Check first few rows
+head(df)
+
+```
+
+# Create a correlation matrix table
+
+```{r}
+library(dplyr)
+
+df_cor<- df %>% select(Forest, Rice,Water,Lag_temp,Temperature,Lag_rain,Rainfall,NDVI,Population)
+
+mcor<-round(cor(df_cor),2)
+upper<-mcor
+upper[upper.tri(mcor)]<-""
+cor_matrix<-as.data.frame(upper)
+cor_matrix
+
+```
+
+
+# Select variables with correlation coefficients <0.7 and compute centering and powering variables
+
+- Final variables including rice cover ratio, forest cover ratio, Bi-monthly rainfall (centering and quadratic term variables), and human population density.
+
+```{r}
+Var_select<- df %>% select(Mosquito,Location,Forest, Rice,Rain_center,Rain_power,Population)
+
+```
+
+# Build a binomial regression model 
+
+```{r}
+library(glmmTMB)
+library(caTools)
+library(caret)
+# Split data into training and testing sets 
+set.seed(7)
+sampling = sample.split(Var_select$Mosquito, SplitRatio = 0.8)
+train = subset(Var_select, sampling == TRUE)
+test  = subset(Var_select, sampling == FALSE)
+# Build a final BNR model using selected variables 
+NBR <- glmmTMB(Mosquito~Forest + Population + Rice +  Rain_center +Rain_power +(1|Location), data=train, family="nbinom2")
+# Model summary
+summary(NBR)
+# Assessing the accuracy
+pre_NBR<- predict(NBR,newdata=test, type = "response") # Predict for new data
+accuracy_NBR<-data.frame( RMSE = RMSE(pre_NBR, test$Mosquito), MAE = MAE(pre_NBR,test$Mosquito))
+accuracy_NBR
+```
+
+# Spatial prediction using selected raster layers
+
+```{r}
+predicted_map<-predict("selected stack layer", NBR, type="response",progress="window")
+```
+
+# Calculate incidence ratio rate
+
+```{r}
+# Get the NBR model estimates and compute incidence ratio rate
+mlist<-confint(NBR)
+
+md<-as.data.frame(t(mlist))[,c(2:6)]
+
+names(md)<-c("Forest cover ratio","Population density","Rice cover ratio","Rain centering variable","Rain quadratic term")
+
+exp(md)
+
+```
+
